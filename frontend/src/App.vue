@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { api, BatchJob, clearToken, Episode, formatBytes, ParsedResult, setToken, Task } from './api'
+import { api, BatchJob, clearToken, Episode, formatBytes, imageUrl, ParsedResult, setToken, Task } from './api'
 
 const setupRequired = ref(false)
 const authed = ref(false)
@@ -18,6 +18,8 @@ const files = ref<any[]>([])
 const settings = ref<Record<string, any>>({})
 const account = ref<any>({})
 const qr = ref<any>(null)
+const busy = ref('')
+const loadError = ref('')
 let timer = 0
 
 const selectedEpisodes = computed(() => {
@@ -58,32 +60,42 @@ function logout() {
 }
 
 async function loadAll() {
-  await Promise.all([loadTasks(), loadBatchJobs(), loadSettings(), loadAccount(), loadLogs(), loadFiles()])
+  await Promise.allSettled([loadTasks(), loadBatchJobs(), loadSettings(), loadAccount(), loadLogs(), loadFiles()])
   window.clearInterval(timer)
   timer = window.setInterval(() => {
-    if (authed.value) void Promise.all([loadTasks(), loadBatchJobs(), loadLogs(), loadFiles()])
+    if (authed.value) void Promise.allSettled([loadTasks(), loadBatchJobs(), loadLogs(), loadFiles()])
   }, 1500)
 }
 
 async function loadTasks() {
-  tasks.value = await api<Task[]>('/api/tasks')
+  await safeLoad(async () => {
+    tasks.value = await api<Task[]>('/api/tasks')
+  })
 }
 
 async function loadBatchJobs() {
-  batchJobs.value = await api<BatchJob[]>('/api/batch-jobs')
+  await safeLoad(async () => {
+    batchJobs.value = await api<BatchJob[]>('/api/batch-jobs')
+  })
 }
 
 async function loadSettings() {
-  settings.value = await api<Record<string, any>>('/api/settings')
+  await safeLoad(async () => {
+    settings.value = await api<Record<string, any>>('/api/settings')
+  })
 }
 
 async function saveSettings() {
-  settings.value = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ values: settings.value }) })
-  message.value = '设置已保存'
+  await runAction('settings', async () => {
+    settings.value = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ values: settings.value }) })
+    message.value = '设置已保存'
+  })
 }
 
 async function loadAccount() {
-  account.value = await api('/api/bilibili/account')
+  await safeLoad(async () => {
+    account.value = await api('/api/bilibili/account')
+  })
 }
 
 async function startQr() {
@@ -100,9 +112,12 @@ async function pollQr() {
 }
 
 async function parse() {
-  message.value = ''
-  parsed.value = await api<ParsedResult>('/api/parse', { method: 'POST', body: JSON.stringify({ url: parseUrl.value }) })
-  selected.value = new Set(parsed.value.episodes.map((ep) => `${ep.bvid}:${ep.cid}`))
+  await runAction('parse', async () => {
+    message.value = '正在解析...'
+    parsed.value = await api<ParsedResult>('/api/parse', { method: 'POST', body: JSON.stringify({ url: parseUrl.value }) })
+    selected.value = new Set(parsed.value.episodes.map((ep) => `${ep.bvid}:${ep.cid}`))
+    message.value = `解析完成：${parsed.value.episodes.length} 个条目`
+  })
 }
 
 function toggle(ep: Episode) {
@@ -113,47 +128,96 @@ function toggle(ep: Episode) {
 }
 
 async function createTasks() {
-  await api('/api/tasks', {
-    method: 'POST',
-    body: JSON.stringify({ episodes: selectedEpisodes.value, options: { source: parseUrl.value } })
+  await runAction('tasks-create', async () => {
+    await api('/api/tasks', {
+      method: 'POST',
+      body: JSON.stringify({ episodes: selectedEpisodes.value, options: { source: parseUrl.value } })
+    })
+    message.value = `已创建 ${selectedEpisodes.value.length} 个下载任务`
+    active.value = 'tasks'
+    await loadTasks()
   })
-  active.value = 'tasks'
-  await loadTasks()
 }
 
 async function createBatchJob() {
-  const job = await api<BatchJob>('/api/batch-jobs', {
-    method: 'POST',
-    body: JSON.stringify({
-      url: parseUrl.value,
-      options: {
-        mode: 'slow_page_batch',
-        page_size: parsed.value?.pagination?.page_size || 30,
-        page_delay_seconds: 3
-      }
+  await runAction('batch-create', async () => {
+    if (!parseUrl.value.trim()) throw new Error('请先填写个人主页链接')
+    const job = await api<BatchJob>('/api/batch-jobs', {
+      method: 'POST',
+      body: JSON.stringify({
+        url: parseUrl.value,
+        options: {
+          mode: 'slow_page_batch',
+          page_size: parsed.value?.pagination?.page_size || 30,
+          page_delay_seconds: 3
+        }
+      })
     })
+    message.value = job?.id ? `慢速批量下载已创建：${job.id.slice(0, 8)}` : '慢速批量下载已创建'
+    active.value = 'tasks'
+    await Promise.allSettled([loadTasks(), loadBatchJobs()])
   })
-  message.value = `慢速批量下载已创建：${job.id.slice(0, 8)}`
-  active.value = 'tasks'
-  await Promise.all([loadTasks(), loadBatchJobs()])
 }
 
 async function batchAction(job: BatchJob, action: 'pause' | 'resume' | 'cancel') {
-  await api(`/api/batch-jobs/${job.id}/${action}`, { method: 'POST', body: '{}' })
-  await loadBatchJobs()
+  await runAction(`batch-${job.id}-${action}`, async () => {
+    await api(`/api/batch-jobs/${job.id}/${action}`, { method: 'POST', body: '{}' })
+    message.value = `慢速批量任务已${actionText(action)}`
+    await Promise.allSettled([loadBatchJobs(), loadTasks()])
+  })
 }
 
 async function taskAction(task: Task, action: 'pause' | 'resume' | 'cancel') {
-  await api(`/api/tasks/${task.id}/${action}`, { method: 'POST', body: '{}' })
-  await loadTasks()
+  await runAction(`task-${task.id}-${action}`, async () => {
+    await api(`/api/tasks/${task.id}/${action}`, { method: 'POST', body: '{}' })
+    message.value = `任务已${actionText(action)}`
+    await loadTasks()
+  })
+}
+
+async function taskBulk(action: 'pause' | 'resume' | 'cancel') {
+  const candidates = tasks.value.filter((task) => action === 'resume' ? task.status === 'paused' : !['completed', 'failed', 'cancelled'].includes(task.status))
+  await runAction(`task-bulk-${action}`, async () => {
+    await Promise.all(candidates.map((task) => api(`/api/tasks/${task.id}/${action}`, { method: 'POST', body: '{}' })))
+    message.value = `${candidates.length} 个任务已${actionText(action)}`
+    await loadTasks()
+  })
 }
 
 async function loadLogs() {
-  logs.value = await api('/api/logs')
+  await safeLoad(async () => {
+    logs.value = await api('/api/logs')
+  })
 }
 
 async function loadFiles() {
-  files.value = await api('/api/files')
+  await safeLoad(async () => {
+    files.value = await api('/api/files')
+  })
+}
+
+async function safeLoad(fn: () => Promise<void>) {
+  try {
+    await fn()
+    loadError.value = ''
+  } catch (error: any) {
+    loadError.value = error.message || String(error)
+  }
+}
+
+async function runAction(name: string, fn: () => Promise<void>) {
+  busy.value = name
+  try {
+    await fn()
+  } catch (error: any) {
+    message.value = error.message || String(error)
+  } finally {
+    busy.value = ''
+  }
+}
+
+function actionText(action: 'pause' | 'resume' | 'cancel') {
+  return action === 'pause' ? '暂停' : action === 'resume' ? '继续' : '取消'
 }
 
 onMounted(async () => {
@@ -193,16 +257,16 @@ onMounted(async () => {
     <section class="workspace">
       <header>
         <strong>{{ active }}</strong>
-        <span>{{ message }}</span>
+        <span>{{ busy ? '处理中...' : (loadError ? `接口异常：${loadError}` : message) }}</span>
       </header>
 
       <section v-if="active === 'parse'" class="pane">
         <div class="url-row">
           <input v-model="parseUrl" placeholder="粘贴 BV 视频链接或 B 站个人主页链接" @keyup.enter="parse" />
-          <button @click="parse">解析</button>
+          <button :disabled="busy === 'parse'" @click="parse">{{ busy === 'parse' ? '解析中' : '解析' }}</button>
         </div>
         <div v-if="parsed" class="parsed">
-          <img :src="parsed.cover" alt="" />
+          <img :src="imageUrl(parsed.cover)" alt="" />
           <div>
             <h2>{{ parsed.title }}</h2>
             <p>
@@ -210,8 +274,8 @@ onMounted(async () => {
               <template v-if="parsed.bvid"> · {{ parsed.bvid }}</template>
               <template v-if="parsed.pagination"> · 第 {{ parsed.pagination.current_page }}/{{ parsed.pagination.total_pages }} 页，共 {{ parsed.pagination.total_items }} 个投稿</template>
             </p>
-            <button @click="createTasks">创建下载任务（{{ selectedEpisodes.length }}）</button>
-            <button @click="createBatchJob">慢速批量下载</button>
+            <button :disabled="busy === 'tasks-create' || !selectedEpisodes.length" @click="createTasks">创建下载任务（{{ selectedEpisodes.length }}）</button>
+            <button :disabled="busy === 'batch-create'" @click="createBatchJob">{{ busy === 'batch-create' ? '创建中' : '慢速批量下载' }}</button>
           </div>
         </div>
         <table v-if="parsed">
@@ -229,6 +293,11 @@ onMounted(async () => {
       </section>
 
       <section v-if="active === 'tasks'" class="pane">
+        <div class="toolbar">
+          <button :disabled="busy === 'task-bulk-pause'" @click="taskBulk('pause')">全部暂停</button>
+          <button :disabled="busy === 'task-bulk-resume'" @click="taskBulk('resume')">全部继续</button>
+          <button class="ghost" :disabled="busy === 'task-bulk-cancel'" @click="taskBulk('cancel')">全部取消</button>
+        </div>
         <div v-if="batchJobs.length" class="batch-panel">
           <h2>慢速批量下载</h2>
           <table>
@@ -240,15 +309,16 @@ onMounted(async () => {
                 <td>第 {{ job.current_page }}/{{ job.total_pages }} 页，已完成 {{ job.completed_pages }} 页</td>
                 <td>{{ job.created }} / {{ job.total_items || job.total }}</td>
                 <td>
-                  <button @click="batchAction(job, 'pause')">暂停</button>
-                  <button @click="batchAction(job, 'resume')">继续</button>
-                  <button @click="batchAction(job, 'cancel')">取消</button>
+                  <button :disabled="busy.startsWith(`batch-${job.id}`) || job.status === 'paused'" @click="batchAction(job, 'pause')">暂停</button>
+                  <button :disabled="busy.startsWith(`batch-${job.id}`) || !['paused', 'failed'].includes(job.status)" @click="batchAction(job, 'resume')">继续</button>
+                  <button :disabled="busy.startsWith(`batch-${job.id}`) || ['completed', 'cancelled'].includes(job.status)" @click="batchAction(job, 'cancel')">取消</button>
                 </td>
               </tr>
             </tbody>
           </table>
         </div>
-        <table>
+        <div v-else class="empty-state">暂无慢速批量任务</div>
+        <table v-if="tasks.length">
           <thead><tr><th>标题</th><th>状态</th><th>进度</th><th>速度</th><th>输出</th><th>操作</th></tr></thead>
           <tbody>
             <tr v-for="task in tasks" :key="task.id">
@@ -258,18 +328,19 @@ onMounted(async () => {
               <td>{{ formatBytes(task.speed) }}/s</td>
               <td>{{ task.output_file || task.output_dir }}</td>
               <td>
-                <button @click="taskAction(task, 'pause')">暂停</button>
-                <button @click="taskAction(task, 'resume')">继续</button>
-                <button @click="taskAction(task, 'cancel')">取消</button>
+                <button :disabled="busy.startsWith(`task-${task.id}`) || ['paused', 'completed', 'failed', 'cancelled'].includes(task.status)" @click="taskAction(task, 'pause')">暂停</button>
+                <button :disabled="busy.startsWith(`task-${task.id}`) || task.status !== 'paused'" @click="taskAction(task, 'resume')">继续</button>
+                <button :disabled="busy.startsWith(`task-${task.id}`) || ['completed', 'cancelled'].includes(task.status)" @click="taskAction(task, 'cancel')">取消</button>
               </td>
             </tr>
           </tbody>
         </table>
+        <div v-else class="empty-state">暂无下载任务。创建任务后这里会显示进度、速度和输出路径。</div>
       </section>
 
       <section v-if="active === 'account'" class="pane account">
         <div class="account-card">
-          <img v-if="account.face" :src="account.face" alt="" />
+          <img v-if="account.face" :src="imageUrl(account.face)" alt="" />
           <div>
             <h2>{{ account.is_login ? account.uname : '未登录 B 站' }}</h2>
             <p>{{ account.is_login ? `UID ${account.mid} · Lv ${account.level}` : account.error }}</p>

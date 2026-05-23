@@ -103,6 +103,7 @@ def pause_task(task_id: str) -> None:
 def resume_task(task_id: str) -> None:
     update_task(task_id, status="queued", error="")
     log("info", "任务已重新排队", task_id)
+    manager.start()
 
 
 def cancel_task(task_id: str) -> None:
@@ -149,6 +150,9 @@ class DownloadManager:
         update_task(task_id, status="parsing", progress=0, error="")
         client = BiliClient()
         play = await client.playurl(task["bvid"], int(task["cid"]), int(settings.get("video_quality", 80)))
+        task = get_task(task_id)
+        if not task or task["status"] != "parsing":
+            return
         streams = select_streams(play)
         out_dir = safe_child(settings["download_dir"], clean_name(task["bvid"]))
         out_dir.mkdir(parents=True, exist_ok=True)

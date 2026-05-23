@@ -10,7 +10,7 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from .bilibili import BiliClient
 from .database import connect, log
-from .tasks import create_tasks, get_task
+from .tasks import cancel_task, create_tasks, get_task, list_tasks, pause_task, resume_task
 
 
 TERMINAL_TASK_STATUS = {"completed", "failed", "cancelled"}
@@ -64,15 +64,32 @@ def update_batch_job(job_id: str, **values: Any) -> None:
 
 def pause_batch_job(job_id: str) -> None:
     update_batch_job(job_id, status="paused")
+    for task in _tasks_for_job(job_id):
+        if task["status"] not in TERMINAL_TASK_STATUS:
+            pause_task(task["id"])
 
 
 def resume_batch_job(job_id: str) -> None:
     update_batch_job(job_id, status="queued", error="")
+    for task in _tasks_for_job(job_id):
+        if task["status"] == "paused":
+            resume_task(task["id"])
     manager.start()
 
 
 def cancel_batch_job(job_id: str) -> None:
     update_batch_job(job_id, status="cancelled")
+    for task in _tasks_for_job(job_id):
+        if task["status"] not in TERMINAL_TASK_STATUS:
+            cancel_task(task["id"])
+
+
+def _tasks_for_job(job_id: str) -> list[dict[str, Any]]:
+    result = []
+    for task in list_tasks():
+        if (task.get("options") or {}).get("batch_job_id") == job_id:
+            result.append(task)
+    return result
 
 
 class BatchJobManager:

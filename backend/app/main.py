@@ -3,10 +3,13 @@ from __future__ import annotations
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
+import httpx
 from pydantic import BaseModel
 
 from .batch import (
@@ -18,7 +21,7 @@ from .batch import (
     pause_batch_job,
     resume_batch_job,
 )
-from .bilibili import BiliClient, BiliError
+from .bilibili import BiliClient, BiliError, UA
 from .config import DEFAULT_SETTINGS, ensure_dirs
 from .database import connect, init_db, read_settings, row_to_dict, write_settings
 from .security import create_session, hash_password, current_user, verify_password
@@ -147,6 +150,28 @@ async def parse(payload: ParsePayload, user: dict = Depends(current_user)) -> di
         return await BiliClient().parse_url(payload.url)
     except BiliError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/image")
+async def image_proxy(url: str) -> Response:
+    parsed = urlparse(url)
+    allowed_hosts = ("hdslb.com", "bilivideo.com", "bilibili.com")
+    if parsed.scheme not in {"http", "https"} or not any(parsed.netloc.endswith(host) for host in allowed_hosts):
+        raise HTTPException(status_code=400, detail="Unsupported image host")
+    headers = {
+        "User-Agent": UA,
+        "Referer": "https://www.bilibili.com/",
+    }
+    async with httpx.AsyncClient(headers=headers, timeout=20, follow_redirects=True) as client:
+        response = await client.get(url)
+    if response.status_code >= 400:
+        raise HTTPException(status_code=response.status_code, detail="Image fetch failed")
+    content_type = response.headers.get("content-type", "image/jpeg")
+    return Response(
+        response.content,
+        media_type=content_type,
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 @app.post("/api/tasks")

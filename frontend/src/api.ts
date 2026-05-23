@@ -91,6 +91,12 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   return response.json()
 }
 
+export function imageUrl(value: string) {
+  if (!value) return ''
+  if (value.startsWith('data:') || value.startsWith('/api/image')) return value
+  return `/api/image?url=${encodeURIComponent(value)}`
+}
+
 export function formatBytes(value: number) {
   if (!value) return '0 B'
   const units = ['B', 'KB', 'MB', 'GB', 'TB']
