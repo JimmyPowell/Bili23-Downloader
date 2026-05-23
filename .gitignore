@@ -26,3 +26,10 @@ uv.toml
 
 # webui
 /src/webui/
+
+# server/web migration
+/backend/.deps/
+/backend/data/
+/frontend/node_modules/
+/frontend/dist/
+/downloads/
