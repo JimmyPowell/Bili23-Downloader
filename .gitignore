@@ -29,7 +29,12 @@ uv.toml
 
 # server/web migration
 /backend/.deps/
+/backend/.conda-deps/
 /backend/data/
+/backend/*.log
+/backend/*.pid
 /frontend/node_modules/
 /frontend/dist/
+/frontend/*.log
+/frontend/*.pid
 /downloads/

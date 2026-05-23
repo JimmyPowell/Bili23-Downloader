@@ -180,14 +180,18 @@ onMounted(async () => {
 
       <section v-if="active === 'parse'" class="pane">
         <div class="url-row">
-          <input v-model="parseUrl" placeholder="粘贴 Bilibili BV 视频链接" @keyup.enter="parse" />
+          <input v-model="parseUrl" placeholder="粘贴 BV 视频链接或 B 站个人主页链接" @keyup.enter="parse" />
           <button @click="parse">解析</button>
         </div>
         <div v-if="parsed" class="parsed">
           <img :src="parsed.cover" alt="" />
           <div>
             <h2>{{ parsed.title }}</h2>
-            <p>{{ parsed.uploader }} · {{ parsed.bvid }}</p>
+            <p>
+              {{ parsed.uploader }}
+              <template v-if="parsed.bvid"> · {{ parsed.bvid }}</template>
+              <template v-if="parsed.pagination"> · 第 {{ parsed.pagination.current_page }}/{{ parsed.pagination.total_pages }} 页，共 {{ parsed.pagination.total_items }} 个投稿</template>
+            </p>
             <button @click="createTasks">创建下载任务（{{ selectedEpisodes.length }}）</button>
             <button @click="createBatchJob">服务端全部下载</button>
           </div>
