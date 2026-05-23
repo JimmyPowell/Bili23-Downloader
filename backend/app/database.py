@@ -81,12 +81,26 @@ def init_db() -> None:
                 status TEXT NOT NULL,
                 total INTEGER NOT NULL DEFAULT 0,
                 created INTEGER NOT NULL DEFAULT 0,
+                current_page INTEGER NOT NULL DEFAULT 1,
+                page_size INTEGER NOT NULL DEFAULT 30,
+                total_pages INTEGER NOT NULL DEFAULT 1,
+                total_items INTEGER NOT NULL DEFAULT 0,
+                completed_pages INTEGER NOT NULL DEFAULT 0,
+                options TEXT NOT NULL DEFAULT '{}',
                 error TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
             );
             """
         )
+        _ensure_columns(db, "batch_jobs", {
+            "current_page": "INTEGER NOT NULL DEFAULT 1",
+            "page_size": "INTEGER NOT NULL DEFAULT 30",
+            "total_pages": "INTEGER NOT NULL DEFAULT 1",
+            "total_items": "INTEGER NOT NULL DEFAULT 0",
+            "completed_pages": "INTEGER NOT NULL DEFAULT 0",
+            "options": "TEXT NOT NULL DEFAULT '{}'",
+        })
         for key, value in DEFAULT_SETTINGS.items():
             db.execute(
                 "INSERT OR IGNORE INTO settings(key, value) VALUES(?, ?)",
@@ -96,6 +110,13 @@ def init_db() -> None:
             "INSERT OR IGNORE INTO bili_sessions(id, updated_at) VALUES(1, ?)",
             (int(time.time()),),
         )
+
+
+def _ensure_columns(db: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
+    existing = {row["name"] for row in db.execute(f"PRAGMA table_info({table})").fetchall()}
+    for name, definition in columns.items():
+        if name not in existing:
+            db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
 
 
 def row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { api, clearToken, Episode, formatBytes, ParsedResult, setToken, Task } from './api'
+import { api, BatchJob, clearToken, Episode, formatBytes, ParsedResult, setToken, Task } from './api'
 
 const setupRequired = ref(false)
 const authed = ref(false)
@@ -12,6 +12,7 @@ const parseUrl = ref('')
 const parsed = ref<ParsedResult | null>(null)
 const selected = ref<Set<string>>(new Set())
 const tasks = ref<Task[]>([])
+const batchJobs = ref<BatchJob[]>([])
 const logs = ref<any[]>([])
 const files = ref<any[]>([])
 const settings = ref<Record<string, any>>({})
@@ -57,15 +58,19 @@ function logout() {
 }
 
 async function loadAll() {
-  await Promise.all([loadTasks(), loadSettings(), loadAccount(), loadLogs(), loadFiles()])
+  await Promise.all([loadTasks(), loadBatchJobs(), loadSettings(), loadAccount(), loadLogs(), loadFiles()])
   window.clearInterval(timer)
   timer = window.setInterval(() => {
-    if (authed.value) void Promise.all([loadTasks(), loadLogs(), loadFiles()])
+    if (authed.value) void Promise.all([loadTasks(), loadBatchJobs(), loadLogs(), loadFiles()])
   }, 1500)
 }
 
 async function loadTasks() {
   tasks.value = await api<Task[]>('/api/tasks')
+}
+
+async function loadBatchJobs() {
+  batchJobs.value = await api<BatchJob[]>('/api/batch-jobs')
 }
 
 async function loadSettings() {
@@ -117,12 +122,25 @@ async function createTasks() {
 }
 
 async function createBatchJob() {
-  await api('/api/batch-jobs', {
+  const job = await api<BatchJob>('/api/batch-jobs', {
     method: 'POST',
-    body: JSON.stringify({ url: parseUrl.value, options: { mode: 'all' } })
+    body: JSON.stringify({
+      url: parseUrl.value,
+      options: {
+        mode: 'slow_page_batch',
+        page_size: parsed.value?.pagination?.page_size || 30,
+        page_delay_seconds: 3
+      }
+    })
   })
+  message.value = `慢速批量下载已创建：${job.id.slice(0, 8)}`
   active.value = 'tasks'
-  await loadTasks()
+  await Promise.all([loadTasks(), loadBatchJobs()])
+}
+
+async function batchAction(job: BatchJob, action: 'pause' | 'resume' | 'cancel') {
+  await api(`/api/batch-jobs/${job.id}/${action}`, { method: 'POST', body: '{}' })
+  await loadBatchJobs()
 }
 
 async function taskAction(task: Task, action: 'pause' | 'resume' | 'cancel') {
@@ -193,7 +211,7 @@ onMounted(async () => {
               <template v-if="parsed.pagination"> · 第 {{ parsed.pagination.current_page }}/{{ parsed.pagination.total_pages }} 页，共 {{ parsed.pagination.total_items }} 个投稿</template>
             </p>
             <button @click="createTasks">创建下载任务（{{ selectedEpisodes.length }}）</button>
-            <button @click="createBatchJob">服务端全部下载</button>
+            <button @click="createBatchJob">慢速批量下载</button>
           </div>
         </div>
         <table v-if="parsed">
@@ -211,6 +229,25 @@ onMounted(async () => {
       </section>
 
       <section v-if="active === 'tasks'" class="pane">
+        <div v-if="batchJobs.length" class="batch-panel">
+          <h2>慢速批量下载</h2>
+          <table>
+            <thead><tr><th>来源</th><th>状态</th><th>页数</th><th>已创建</th><th>操作</th></tr></thead>
+            <tbody>
+              <tr v-for="job in batchJobs" :key="job.id">
+                <td>{{ job.source_url }}<small>{{ job.error }}</small></td>
+                <td><span class="badge">{{ job.status }}</span></td>
+                <td>第 {{ job.current_page }}/{{ job.total_pages }} 页，已完成 {{ job.completed_pages }} 页</td>
+                <td>{{ job.created }} / {{ job.total_items || job.total }}</td>
+                <td>
+                  <button @click="batchAction(job, 'pause')">暂停</button>
+                  <button @click="batchAction(job, 'resume')">继续</button>
+                  <button @click="batchAction(job, 'cancel')">取消</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
         <table>
           <thead><tr><th>标题</th><th>状态</th><th>进度</th><th>速度</th><th>输出</th><th>操作</th></tr></thead>
           <tbody>

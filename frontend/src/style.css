@@ -140,6 +140,12 @@ progress { width: 150px; }
   color: #24527a;
   padding: 4px 8px;
 }
+.batch-panel {
+  margin-bottom: 20px;
+}
+.batch-panel h2 {
+  margin: 0 0 10px;
+}
 .settings {
   max-width: 760px;
   display: grid;

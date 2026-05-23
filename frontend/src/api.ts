@@ -44,6 +44,20 @@ export type Task = {
   output_file: string
 }
 
+export type BatchJob = {
+  id: string
+  source_url: string
+  status: string
+  total: number
+  created: number
+  current_page: number
+  page_size: number
+  total_pages: number
+  total_items: number
+  completed_pages: number
+  error: string
+}
+
 const tokenKey = 'bili23_token'
 
 export function getToken() {

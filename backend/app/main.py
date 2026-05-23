@@ -9,6 +9,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from .batch import (
+    cancel_batch_job,
+    create_batch_job as enqueue_batch_job,
+    get_batch_job,
+    list_batch_jobs,
+    manager as batch_manager,
+    pause_batch_job,
+    resume_batch_job,
+)
 from .bilibili import BiliClient, BiliError
 from .config import DEFAULT_SETTINGS, ensure_dirs
 from .database import connect, init_db, read_settings, row_to_dict, write_settings
@@ -58,6 +67,7 @@ def startup() -> None:
     ensure_dirs()
     init_db()
     manager.start()
+    batch_manager.start()
 
 
 @app.get("/api/health")
@@ -147,10 +157,39 @@ def create_download_tasks(payload: CreateTasksPayload, user: dict = Depends(curr
 
 
 @app.post("/api/batch-jobs")
-async def create_batch_job(payload: BatchJobPayload, user: dict = Depends(current_user)) -> dict[str, Any]:
-    parsed = await BiliClient().parse_url(payload.url)
-    tasks = create_tasks(parsed["episodes"], {"source": payload.url, **payload.options})
-    return {"source": parsed, "tasks": tasks, "total": len(tasks)}
+def create_slow_batch_job(payload: BatchJobPayload, user: dict = Depends(current_user)) -> dict[str, Any]:
+    return enqueue_batch_job(payload.url, payload.options)
+
+
+@app.get("/api/batch-jobs")
+def batch_jobs(user: dict = Depends(current_user)) -> list[dict[str, Any]]:
+    return list_batch_jobs()
+
+
+@app.get("/api/batch-jobs/{job_id}")
+def batch_job_detail(job_id: str, user: dict = Depends(current_user)) -> dict[str, Any]:
+    job = get_batch_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Batch job not found")
+    return job
+
+
+@app.post("/api/batch-jobs/{job_id}/pause")
+def batch_job_pause(job_id: str, user: dict = Depends(current_user)) -> dict[str, bool]:
+    pause_batch_job(job_id)
+    return {"ok": True}
+
+
+@app.post("/api/batch-jobs/{job_id}/resume")
+def batch_job_resume(job_id: str, user: dict = Depends(current_user)) -> dict[str, bool]:
+    resume_batch_job(job_id)
+    return {"ok": True}
+
+
+@app.post("/api/batch-jobs/{job_id}/cancel")
+def batch_job_cancel(job_id: str, user: dict = Depends(current_user)) -> dict[str, bool]:
+    cancel_batch_job(job_id)
+    return {"ok": True}
 
 
 @app.get("/api/tasks")
